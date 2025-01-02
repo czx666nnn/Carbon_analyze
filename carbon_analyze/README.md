@@ -37,16 +37,5 @@ python app.py --pdf_path  reports/2023-tesla-impact-report-highlights.pdf --user
 - user_question takes the user's question
 - answer_length specifies the length of generation 
 
-## Citation
-Please cite our paper if you use CHATREPORT in your research.
-```bibtex
-@misc{ni2023chatreport,
-      title={CHATREPORT: Democratizing Sustainability Disclosure Analysis through LLM-based Tools}, 
-      author={Jingwei Ni and Julia Bingler and Chiara Colesanti-Senni and Mathias Kraus and Glen Gostlow and Tobias Schimanski and Dominik Stammbach and Saeid Ashraf Vaghefi and Qian Wang and Nicolas Webersinke and Tobias Wekhof and Tingyu Yu and Markus Leippold},
-      year={2023},
-      eprint={2307.15770},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL}
-}
-```
+
 
