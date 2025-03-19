@@ -1,4 +1,4 @@
-# Enterprise Carbon Emission Analysis and Knowledge Question-Answering System Based on Large Language Models
+# 基于大语言模型的企业碳排放分析与知识问答系统
 ## Directories
 - data: Shown is our manually annotated dataset
   - data/RAG_data.xlsx: Dataset to test text retrieval
