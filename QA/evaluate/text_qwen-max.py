@@ -65,10 +65,11 @@ def change_llm(query):
     输入查询： {query}
     请你按照以下输出要求，逐步完成。
     输出要求：
-    1.将查询分解成多个简单、清晰的子查询。
+    1.将查询分解成5个简单、清晰的子查询。
     2.识别并消除查询中的歧义，提供最可能的解释。
     3.提炼出查询的核心意图和概念元素。
     4.生成一个高层次的简化表示，保留查询的本质含义。
+    5.每个结果之间使用"/"隔开
     '''
     intent_result = model.invoke(intent_prompt)
     return intent_result
@@ -96,7 +97,7 @@ def convert_to_documents(data):
 
 def Key_sentences_with_llm(query):
     intent_prompt = f'''
-    从以下文本中提取关键句：{query};(关键句应该是能够概括主要内容的单词或短语，选择反映核心主题或概念的语句，避免提取常见无关词汇（如：连词、副词等）。关键句数量不超过8个。只返回关键句，不要有其他任何说明。关键句之间使用"/"隔开)
+    从以下文本中提取关键句：{query};(关键句应该是能够概括主要内容的单词或短语，选择反映核心主题或概念的语句，避免提取常见无关词汇（如：连词、副词等）。关键句数量不超过5个。只返回关键句，不要有其他任何说明。关键句之间使用"/"隔开)
     '''
     intent_result = model.invoke(intent_prompt)
     result = intent_result.split('/')
