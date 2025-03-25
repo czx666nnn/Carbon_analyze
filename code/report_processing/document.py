@@ -11,10 +11,12 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import QianfanEmbeddingsEndpoint
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+import langdetect
 
 TOP_K = 10
-CHUNK_SIZE = 300
+BASE_CHUNK_SIZE = 300
 CHUNK_OVERLAP = 50
+MAX_CHUNK_SIZE = 500
 
 QUERIES = {
     'general': ["该报告中涉及的企业名称是什么？", "企业所属的行业类别是什么？", "企业的地理位置在哪里？"],
@@ -73,7 +75,7 @@ class Report:
             self.pdf = fitz.open(self.path)
         else:
             self.parse_pdf_from_url(self.url)
-        self.text_list = [re.sub(r'\s+', ' ', page.get_text().strip()) for page in self.pdf]
+        self.text_list = [re.sub(r'\s+', ' ', page.get_text("text").strip()) for page in self.pdf]
         self.all_text = ' '.join(self.text_list)
         self.retriever, self.vector_db = self._get_retriever(self.db_path)
         self.section_text_dict = self._retrieve_chunks()
@@ -175,42 +177,97 @@ class Report:
                                     cur_title += ' ' + cur_string
         return cur_title.replace('\n', ' ')
 
+    def _detect_language(self, text):
+        return langdetect.detect(text)
+
+    def _get_structured_blocks(self):
+        blocks = []
+        page_numbers = []
+        for i, page in enumerate(self.pdf):
+            text_dict = page.get_text("dict")
+            for block in text_dict["blocks"]:
+                if block["type"] == 0 and len(block["lines"]):
+                    block_text = " ".join([span["text"] for line in block["lines"] for span in line["spans"]])
+                    blocks.append(re.sub(r'\s+', ' ', block_text.strip()))
+                    page_numbers.append(i + 1)
+        return blocks, page_numbers
+
+    def _split_long_chunk(self, chunk, embeddings, max_size=MAX_CHUNK_SIZE):
+        if len(chunk) <= max_size:
+            return [chunk]
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=max_size // 2,
+            chunk_overlap=CHUNK_OVERLAP,
+            length_function=len,
+            separators=["。", "！", "？", ".", "!", "?", "\n", " "]
+        )
+        sub_chunks = text_splitter.split_text(chunk)
+        chunk_embeddings = embeddings.embed_documents(sub_chunks)
+        final_sub_chunks = []
+        i = 0
+        while i < len(sub_chunks):
+            if i + 1 < len(sub_chunks):
+                sim = cosine_similarity([chunk_embeddings[i]], [chunk_embeddings[i + 1]])[0][0]
+                if sim < 0.7:
+                    final_sub_chunks.append(sub_chunks[i])
+                    i += 1
+                else:
+                    final_sub_chunks.append(sub_chunks[i] + " " + sub_chunks[i + 1])
+                    i += 2
+            else:
+                final_sub_chunks.append(sub_chunks[i])
+                i += 1
+        return final_sub_chunks
+
     def _get_retriever(self, db_path):
         embeddings = QianfanEmbeddingsEndpoint(
             qianfan_ak=os.environ["QIANFAN_AK"],
             qianfan_sk=os.environ["QIANFAN_SK"]
         )
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=CHUNK_SIZE,
+        lang = self._detect_language(self.all_text)
+        separators = ["\n\n", "\n", " ", ""] if lang.startswith("zh") else [". ", "! ", "? ", "\n\n", "\n", " "]
+        initial_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=BASE_CHUNK_SIZE,
             chunk_overlap=CHUNK_OVERLAP,
             length_function=len,
-            separators=["\n\n", "\n", " ", ""]
+            separators=separators
         )
-        text_list = [re.sub(r'\s+', ' ', page.get_text().strip()) for page in self.pdf]
-        full_text = ' '.join(text_list)
-        initial_chunks = text_splitter.split_text(full_text)
+        blocks, page_numbers = self._get_structured_blocks()
+        initial_chunks = []
+        chunk_pages = []
+        for block, page in zip(blocks, page_numbers):
+            if block:
+                block_chunks = initial_splitter.split_text(block)
+                initial_chunks.extend(block_chunks)
+                chunk_pages.extend([page] * len(block_chunks))
         chunk_embeddings = embeddings.embed_documents(initial_chunks)
         distances = []
         for i in range(len(chunk_embeddings) - 1):
             sim = cosine_similarity([chunk_embeddings[i]], [chunk_embeddings[i + 1]])[0][0]
             distances.append(1 - sim)
-        threshold = np.percentile(distances, 75)
-        split_indices = [i for i, dist in enumerate(distances) if dist > threshold]
+        mean_dist = np.mean(distances)
+        std_dist = np.std(distances)
+        dynamic_threshold = mean_dist + std_dist
+        split_indices = [i for i, dist in enumerate(distances) if dist > dynamic_threshold]
         final_chunks = []
         start_idx = 0
         for idx in split_indices + [len(initial_chunks)]:
             chunk_text = ' '.join(initial_chunks[start_idx:idx + 1])
-            final_chunks.append(chunk_text)
+            if len(chunk_text) > MAX_CHUNK_SIZE:
+                sub_chunks = self._split_long_chunk(chunk_text, embeddings)
+                final_chunks.extend(sub_chunks)
+            else:
+                final_chunks.append(chunk_text)
             start_idx = idx + 1
         self.chunks = final_chunks
-        self.page_idx = list(range(1, len(self.pdf) + 1))
+        self.page_idx = chunk_pages[:len(self.chunks)]
         if os.path.exists(db_path):
             doc_search = FAISS.load_local(db_path, embeddings=embeddings, allow_dangerous_deserialization=True)
         else:
             doc_search = FAISS.from_texts(
                 self.chunks,
                 embeddings,
-                metadatas=[{"source": str(i), "page": str(i % len(self.page_idx) + 1)} for i in range(len(self.chunks))]
+                metadatas=[{"source": str(i), "page": str(page)} for i, page in enumerate(self.page_idx)]
             )
             doc_search.save_local(db_path)
         return doc_search.as_retriever(search_kwargs={"k": self.top_k}), doc_search
